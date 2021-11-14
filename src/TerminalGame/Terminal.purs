@@ -1,6 +1,7 @@
 module TerminalGame.Terminal where
 
 import Prelude
+import Ansi.Output (withGraphics)
 import Ansi.Codes (EscapeCode(..), escapeCodeToString)
 import Data.Foldable (intercalate)
 import Data.List (List(..))
@@ -70,6 +71,7 @@ getWindowSize w =
   case w of
     FullScreen -> identity
     Window s -> min s
+    -- Requires offset, not sure why
     <$> ({ width: _, height: _ } <$> getCols <*> getRows)
 
 safeWrite :: Window -> Canvas -> Effect Unit

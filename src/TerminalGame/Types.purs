@@ -1,7 +1,7 @@
 module TerminalGame.Types where
 
 import Prelude
-import Ansi.Codes (Color)
+import Ansi.Codes (Color, GraphicsParam(..), RenderingMode)
 import Ansi.Output (background, foreground, withGraphics)
 import Control.Monad.ST as ST
 import Control.Monad.ST (ST)
@@ -10,7 +10,7 @@ import Data.Array.ST as STA
 import Data.Foldable (fold, for_)
 import Data.FoldableWithIndex (forWithIndex_)
 import Data.Map (Map)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.String.CodeUnits as SCU
 import Data.Traversable (traverse)
 import Data.Unfoldable (replicate)
@@ -24,7 +24,7 @@ data Key
   | KeyOne | KeyTwo | KeyThree | KeyFour | KeyFive | KeySix | KeySeven | KeyEight | KeyNine | KeyZero
   | KeyF1 | KeyF2 | KeyF3 | KeyF4 | KeyF5 | KeyF6 | KeyF7 | KeyF8 | KeyF9 | KeyF10 | KeyF11 | KeyF12
   | KeyHyphen | KeyEqual | KeyBackslash | KeyBackquote | KeyBracketOpen | KeyBracketClose | KeySemicolon | KeyQuote | KeyComma | KeyDot | KeySlash
-  | KeyEscape | KeyTab | KeyBackspace | KeyDelete
+  | KeyEscape | KeyTab | KeySpace | KeyBackspace | KeyDelete | KeyReturn
   | KeyUp | KeyDown | KeyLeft | KeyRight
   | KeyHome | KeyEnd | KeyInsert | KeyPageUp | KeyPageDown
 
@@ -79,8 +79,10 @@ instance showKey :: Show Key where
   show KeyF12 = "F12"
   show KeyEscape  = "Escape"
   show KeyTab  = "Tab"
+  show KeySpace = "Space"
   show KeyBackspace  = "Backspace"
   show KeyDelete = "Delete"
+  show KeyReturn = "Return"
   show KeyUp  = "Up"
   show KeyDown  = "Down"
   show KeyLeft  = "Left"
@@ -157,8 +159,10 @@ validateKey { sequence, name } =
     Just "f12" -> Just KeyF12
     Just "escape"    -> Just KeyEscape 
     Just "tab"       -> Just KeyTab 
+    Just "space"     -> Just KeySpace
     Just "backspace" -> Just KeyBackspace 
     Just "delete"    -> Just KeyDelete
+    Just "return"     -> Just KeyReturn
     Just "up"        -> Just KeyUp 
     Just "down"      -> Just KeyDown 
     Just "left"      -> Just KeyLeft 
@@ -203,17 +207,18 @@ type Vector3 = { x :: Int, y :: Int, z :: Int }
 vec3 :: Int -> Int -> Int -> Vector3
 vec3 = { x: _, y: _, z: _ }
 
-type Canvas = Map Vector3 { fg :: Color, bg :: Color, char :: Char }
+type Canvas = Map Vector3 { fg :: Color, bg :: Color, mode :: Maybe RenderingMode, char :: Char }
 
 projectOnWindow :: Size -> Canvas -> Array String
 projectOnWindow size canvas =
   bufferToStrs $
     runMatrix do
       buffer <- initBuffer size
-      forWithIndex_ canvas \{ x, y, z } { fg, bg, char } ->
+      forWithIndex_ canvas \{ x, y, z } { fg, bg, mode, char } ->
         STA.peek y buffer >>= case _ of
           Just line -> do
-            void $ STA.modify x (flip minDepth { depth: z, str: withGraphics (foreground fg <> background bg) (SCU.singleton char) }) line
+            let params = maybe identity ((<>) <<< pure <<< PMode) mode $ foreground fg <> background bg
+            void $ STA.modify x (flip minDepth { depth: z, str: withGraphics params (SCU.singleton char) }) line
             pure unit
           Nothing -> pure unit
       pure buffer
