@@ -10,7 +10,7 @@ import Control.Monad.State.Class (class MonadState)
 import Control.Monad.State (get, modify_)
 import Control.Monad.Trans.Class (lift)
 import Data.FoldableWithIndex (forWithIndex_)
-import Data.List (List(..), uncons)
+import Data.List (List)
 import Data.Map as M
 import Data.Maybe (Maybe(..), maybe)
 import Data.Newtype (class Newtype, over, unwrap, wrap)
@@ -24,6 +24,40 @@ import Effect.Ref as Ref
 import Effect.Timer (IntervalId, clearInterval, setInterval)
 import TerminalGame.Terminal (initTerminal, resetTerminal, safeWrite)
 import TerminalGame.Types (Canvas, FPS, KeyState, Vector3, Window, vec3)
+import TerminalGame.Queue (Queue, dequeue, toList)
+
+
+{---------- Classes ----------}
+
+class (MonadState s m, MonadEffect m) <= MonadGame s m | m -> s where
+  setFg :: Color -> m Unit
+  setBg :: Color -> m Unit
+  setMode :: RenderingMode -> m Unit
+  dot :: Char -> m Unit
+  clear :: m Unit
+  flush :: m Unit
+  moveV :: Vector3 -> m Unit
+  moveToV :: Vector3 -> m Unit
+  local :: m Unit -> m Unit
+  quit :: Effect Unit -> m Unit
+  popPressedKey :: m (Maybe KeyState)
+  popPressedKeys :: m (List KeyState)
+
+hline :: forall s m. MonadGame s m => String -> m Unit
+hline s = local $ forWithIndex_ (SCU.toCharArray s) \x c -> do
+  moveTo x 0 0
+  dot c
+
+vline :: forall s m. MonadGame s m => String -> m Unit
+vline s = forWithIndex_ (SCU.toCharArray s) \y c -> local do
+  moveTo 0 y 0
+  dot c
+
+move :: forall s m. MonadGame s m => Int -> Int -> Int -> m Unit
+move x y z = moveV $ vec3 x y z
+
+moveTo :: forall s m. MonadGame s m => Int -> Int -> Int -> m Unit
+moveTo x y z = moveToV $ vec3 x y z
 
 
 {---------- Definitions ----------}
@@ -64,62 +98,22 @@ derive newtype instance monadRecGame :: MonadRec (Game s)
 instance monadEffectGame :: MonadEffect (Game s) where
   liftEffect m = wrap $ liftF $ LiftEffect m
 
-instance monadState :: MonadState s (Game s) where
+instance monadStateGame :: MonadState s (Game s) where
   state m = wrap $ liftF $ State m
 
-{---------- Commands ----------}
-
-setFg :: forall s. Color -> Game s Unit
-setFg c = wrap $ liftF $ Fg c unit
-
-setBg :: forall s. Color -> Game s Unit
-setBg c = wrap $ liftF $ Bg c unit
-
-setMode :: forall s. RenderingMode -> Game s Unit
-setMode mode = wrap $ liftF $ Mode mode unit
-
-dot :: forall s. Char -> Game s Unit
-dot c = wrap $ liftF $ Dot c unit
-
-hline :: forall s. String -> Game s Unit
-hline s = local $ forWithIndex_ (SCU.toCharArray s) \x c -> do
-  moveTo x 0 0
-  dot c
-
-vline :: forall s. String -> Game s Unit
-vline s = forWithIndex_ (SCU.toCharArray s) \y c -> local do
-  moveTo 0 y 0
-  dot c
-
-clear :: forall s. Game s Unit
-clear = wrap $ liftF $ Clear unit
-
-flush :: forall s. Game s Unit
-flush = wrap $ liftF $ Flush unit
-
-moveV :: forall s. Vector3 -> Game s Unit
-moveV v = wrap $ liftF $ Move v unit
-
-move :: forall s. Int -> Int -> Int -> Game s Unit
-move x y z = moveV $ vec3 x y z
-
-moveToV :: forall s. Vector3 -> Game s Unit
-moveToV v = wrap $ liftF $ MoveTo v unit
-
-moveTo :: forall s. Int -> Int -> Int -> Game s Unit
-moveTo x y z = moveToV $ vec3 x y z
-
-local :: forall s. Game s Unit -> Game s Unit
-local m = wrap $ liftF $ Local m
-
-quit :: forall s. Effect Unit -> Game s Unit
-quit cb = wrap $ liftF $ Quit cb
-
-popPressedKey :: forall s. Game s (Maybe KeyState)
-popPressedKey = wrap $ liftF $ PopPressedKey identity
-
-popPressedKeys :: forall s. Game s (List KeyState)
-popPressedKeys = wrap $ liftF $ PopPressedKeys identity
+instance monadGameGame :: MonadGame s (Game s) where
+  setFg c = wrap $ liftF $ Fg c unit
+  setBg c = wrap $ liftF $ Bg c unit
+  setMode mode = wrap $ liftF $ Mode mode unit
+  dot c = wrap $ liftF $ Dot c unit
+  clear = wrap $ liftF $ Clear unit
+  flush = wrap $ liftF $ Flush unit
+  moveV v = wrap $ liftF $ Move v unit
+  moveToV v = wrap $ liftF $ MoveTo v unit
+  local m = wrap $ liftF $ Local m
+  quit cb = wrap $ liftF $ Quit cb
+  popPressedKey = wrap $ liftF $ PopPressedKey identity
+  popPressedKeys = wrap $ liftF $ PopPressedKeys identity
 
 
 {---------- Runners ----------}
@@ -127,7 +121,7 @@ popPressedKeys = wrap $ liftF $ PopPressedKeys identity
 runGame :: forall s. { window :: Window, fps :: FPS } -> s -> Game s Unit -> Effect Unit
 runGame { window, fps } s m = do
   canvas <- Ref.new M.empty
-  keys <- Ref.new Nil
+  keys <- Ref.new mempty
   id <- Ref.new Nothing
   userState <- Ref.new s
   initTerminal keys
@@ -135,7 +129,7 @@ runGame { window, fps } s m = do
   Ref.modify_ (const $ Just id') id
   pure unit
   where
-  initParams :: Ref Canvas -> Ref (List KeyState) -> Ref (Maybe IntervalId) -> Ref s -> GameParams s
+  initParams :: Ref Canvas -> Ref (Queue KeyState) -> Ref (Maybe IntervalId) -> Ref s -> GameParams s
   initParams canvas pressedKeys intervalId userState =
     { window
     , globalPos : vec3 0 0 0
@@ -158,7 +152,7 @@ type GameParams s =
   , bg :: Color
   , mode :: Maybe RenderingMode
   , canvas :: Ref Canvas
-  , pressedKeys :: Ref (List KeyState)
+  , pressedKeys :: Ref (Queue KeyState)
   , intervalId :: Ref (Maybe IntervalId)
   , userState :: Ref s
   }
@@ -188,7 +182,7 @@ newtype GameReader s
     { window :: Window
     , globalPos :: Vector3
     , canvas :: Ref Canvas
-    , pressedKeys :: Ref (List KeyState)
+    , pressedKeys :: Ref (Queue KeyState)
     , intervalId :: Ref (Maybe IntervalId)
     , userState :: Ref s
     }
@@ -243,11 +237,12 @@ runCommand (Local m) = do
   lift $ runGameOnce { window, globalPos: pos + globalPos, fg, bg, mode, canvas, pressedKeys, intervalId, userState } m
 runCommand (PopPressedKey a) = do
   GameReader { pressedKeys } <- ask
-  key <- lift $ Ref.read pressedKeys >>= uncons >>> traverse (\{ head, tail } -> Ref.modify_ (const tail) pressedKeys $> head)
+  key <- lift $ Ref.read pressedKeys >>= dequeue >>> traverse \{ last, rest } -> Ref.modify_ (const rest) pressedKeys $> last
   a <$> pure key
 runCommand (PopPressedKeys a) = do
   GameReader { pressedKeys } <- ask
-  a <$> lift (Ref.modify' (\keys -> { state: Nil, value: keys }) pressedKeys)
+  -- a <$> lift (Ref.modify' (\keys -> { state: Nil, value: keys }) pressedKeys)
+  a <$> lift (Ref.modify' (\keys -> { state: mempty, value: toList keys }) pressedKeys)
 runCommand (Quit cb) = do
   GameReader { intervalId } <- ask
   lift $ Ref.read intervalId >>= maybe (pure unit) clearInterval

@@ -1,10 +1,8 @@
 module TerminalGame.Terminal where
 
 import Prelude
-import Ansi.Output (withGraphics)
 import Ansi.Codes (EscapeCode(..), escapeCodeToString)
 import Data.Foldable (intercalate)
-import Data.List (List(..))
 import Data.Maybe (Maybe(..))
 import Data.String.CodeUnits as SCU
 import Effect (Effect)
@@ -13,6 +11,7 @@ import Effect.Ref as Ref
 import Node.Process (exit, stdin, stdinIsTTY)
 import Node.Stream (Readable)
 import TerminalGame.Types (Canvas, KeyState, Size, Vector2, Window(..), projectOnWindow, validateKey)
+import TerminalGame.Queue (Queue, enqueue)
 
 foreign import getCols :: Effect Int
 
@@ -41,12 +40,12 @@ foreign import emitKeypressEvents :: forall r. Readable r -> Effect Unit
 
 foreign import setRawMode :: forall r. Boolean -> Readable r -> Effect Unit
 
-initTerminal :: Ref (List KeyState) -> Effect Unit
+initTerminal :: Ref (Queue KeyState) -> Effect Unit
 initTerminal pressedKeys = do
   emitKeypressEvents stdin
   when stdinIsTTY $ setRawMode true stdin
   flip onKeypress stdin \{ sequence, name, ctrl, meta, shift } -> case validateKey { sequence, name } of
-    Just key -> Ref.modify_ (Cons { key, ctrl, meta, shift }) pressedKeys
+    Just key -> Ref.modify_ (enqueue { key, ctrl, meta, shift }) pressedKeys
     Nothing -> pure unit
   hideCursor
   resetCursor
@@ -71,7 +70,6 @@ getWindowSize w =
   case w of
     FullScreen -> identity
     Window s -> min s
-    -- Requires offset, not sure why
     <$> ({ width: _, height: _ } <$> getCols <*> getRows)
 
 safeWrite :: Window -> Canvas -> Effect Unit

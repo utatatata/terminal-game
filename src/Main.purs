@@ -3,7 +3,8 @@ module Main where
 import Prelude
 
 import Effect (Effect)
-import Effect.Console (log)
+import Chess (playChess)
+import Panepon (playPanepon)
 
 main :: Effect Unit
-main = log "Hello"
+main = playPanepon
